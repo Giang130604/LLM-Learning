@@ -3,7 +3,7 @@ from google.genai import types
 import pathlib
 
 # Khởi tạo client Gemini
-client = genai.Client(api_key="AIzaSyDZHuPDlDang5rItvWKORmogW5AiDF5ga4")  # Thay bằng API key thực tế của bạn
+client = genai.Client(api_key="AIzaSyCSkPtzL-dI1fgxjCDDvBYxaDYA8z529uQ")  # Thay bằng API key thực tế của bạn
 
 # Đường dẫn đến tệp PDF cục bộ
 local_pdf_path = "../data/pdfs/SỔ TAY HỌC VỤ KỲ I NĂM 2023-2024.pdf"  # Thay bằng đường dẫn thực tế đến tệp PDF của bạn
@@ -21,7 +21,7 @@ prompt = "Nói lại chi tiết về lịch ở trang 7 tài liệu này"
 
 # Gửi yêu cầu đến Gemini API
 response = client.models.generate_content(
-    model="gemini-1.5-flash",  # Sử dụng model gemini-1.5-flash như trong ví dụ của bạn
+    model="gemini-1.5-flash",
     contents=[
         types.Part.from_bytes(
             data=filepath.read_bytes(),
