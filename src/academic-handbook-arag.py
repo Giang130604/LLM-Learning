@@ -29,6 +29,18 @@ SIMILARITY_THRESHOLD = 0.3
 POPPLER_PATH = r"D:\PDFPOP\Release-24.08.0-0\poppler-24.08.0\Library\bin"
 
 
+# # --- Lớp Memory để lưu lịch sử ---
+# class Memory:
+#     def __init__(self):
+#         self.history = []
+#
+#     def add_to_history(self, query: str, response: str):
+#         self.history.append((query, response))
+#
+#     def get_context(self) -> str:
+#         return "\n".join([f"Query: {q}\nResponse: {r}" for q, r in self.history])
+
+
 class VietnameseEmbedder(Embeddings):
     # --- Vietnamese Embedder ---
     def __init__(self, model_name="AITeamVN/Vietnamese_Embedding"):
@@ -68,6 +80,7 @@ def process_pdf(file_path: str) -> List[Document]:
     raw_elements = partition_pdf(
         filename=file_path,
         infer_table_structure=True,
+        extract_images_in_pdf=True,
         chunking_strategy="by_title",
         max_characters=4000,
         new_after_n_chars=3800,
@@ -164,7 +177,8 @@ def get_rag_agent() -> Agent:
         instructions=(
             "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác dựa trên tài liệu.\n"
             "Nếu thông tin đến từ tài liệu PDF, trích dẫn chi tiết và chính xác, kèm theo số trang nếu có.\n"
-            "Nếu thông tin đến từ web, hãy ghi rõ nguồn là 'Web Search' và trả lời tự nhiên dựa trên thông tin đó."
+            "Nếu thông tin đến từ web, hãy ghi rõ nguồn là 'Web Search' và trả lời tự nhiên dựa trên thông tin đó.\n"
+            "Dựa trên lịch sử trò chuyện nếu có để trả lời chính xác hơn."
         ),
         show_tool_calls=True,
         markdown=True,
@@ -180,6 +194,10 @@ def main():
     embedder = VietnameseEmbedder()
     vector_store = FAISSVectorStore(documents, embedder)
     rag_agent = get_rag_agent()
+
+    # Khởi tạo Memory
+    # memory = Memory()
+
     while True:
         print("\nNhập câu hỏi của bạn (nhập 'thoát' để kết thúc): ")
         query = input().strip().lower()
@@ -188,6 +206,12 @@ def main():
             print("Đã thoát chương trình.")
             break
         source, context = retriever_agent(query, vector_store)
+
+        # Thêm lịch sử trò chuyện vào bối cảnh
+        # memory_context = memory.get_context()
+        # if memory_context:
+        #     context += f"\n\nLịch sử trò chuyện:\n{memory_context}"
+
         print(f"\nNguồn: {source}")
         try:
             full_prompt = (
@@ -201,6 +225,9 @@ def main():
             answer = response.content
             print("\n=== Câu trả lời ===")
             print(answer)
+
+            # Lưu vào lịch sử
+            # memory.add_to_history(query, answer)
         except Exception as e:
             logger.error(f"Lỗi khi sinh câu trả lời: {e}")
             print(f"Lỗi khi sinh câu trả lời: {e}")
