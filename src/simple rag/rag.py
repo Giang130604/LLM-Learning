@@ -18,7 +18,7 @@ embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # 2. Load dataset
 dataset = []
-with open('../data/text/cat-facts.txt', 'r', encoding='utf-8', errors='ignore') as file:
+with open('../../data/text/cat-facts.txt', 'r', encoding='utf-8', errors='ignore') as file:
     dataset = file.readlines()
     print(f'Loaded {len(dataset)} entries')
 chunks = []

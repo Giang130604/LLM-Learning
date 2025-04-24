@@ -14,11 +14,11 @@ from nltk.tokenize import sent_tokenize
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
-with open('../data/text/cat-facts.txt', 'r', encoding='utf-8', errors='ignore') as f:
+with open('../../data/text/cat-facts.txt', 'r', encoding='utf-8', errors='ignore') as f:
     dataset_lines_a = f.readlines()
 
 
-with open('../data/text/facts.txt', 'r', encoding='utf-8', errors='ignore') as f:
+with open('../../data/text/facts.txt', 'r', encoding='utf-8', errors='ignore') as f:
     dataset_lines_b = f.readlines()
 
 
