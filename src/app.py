@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from academic_handbook_arag import process_pdf, VietnameseEmbedder, FAISSVectorStore, retriever_agent, get_rag_agent
+from main import process_pdf, VietnameseEmbedder, FAISSVectorStore, retriever_agent, get_rag_agent
 from persistent_memory import PersistentMemory
 import shutil
 from typing import List

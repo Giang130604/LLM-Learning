@@ -1,35 +1,22 @@
 import os
-import sqlite3
-import sys
 import numpy as np
 import faiss
 from unstructured.partition.pdf import partition_pdf
 from langchain_core.documents import Document
-import google.generativeai as genai
-from agno.agent import Agent
-from agno.models.google import Gemini
 from langchain_core.embeddings import Embeddings
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 import logging
 import urllib.parse
 import requests
 from sentence_transformers import SentenceTransformer
 import pickle
 import hashlib
-from persistent_memory import PersistentMemory
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = "AIzaSyCSkPtzL-dI1fgxjCDDvBYxaDYA8z529uQ"
-os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
-genai.configure(api_key=GEMINI_API_KEY)
-
-SERPER_API_KEY = "b91e335ef3ef0b0f01dceef77c1c057d0d538bed"
-
-PDF_PATH = "../data/pdfs/SỔ TAY HỌC VỤ KỲ I NĂM 2023-2024.pdf"
 SIMILARITY_THRESHOLD = 0.3
 CACHE_DIR = "../data/cache"
 
@@ -49,7 +36,7 @@ def get_file_hash(file_path: str) -> str:
 def process_pdf(file_path: str) -> List[Document]:
     if not os.path.exists(file_path):
         logger.error(f"File PDF không tồn tại: {file_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"File PDF không tồn tại: {file_path}")
 
     pdf_name = os.path.basename(file_path)
     cache_file = os.path.join(CACHE_DIR, f"{pdf_name}.pkl")
@@ -131,7 +118,7 @@ class VietnameseEmbedder(Embeddings):
             logger.error(f"Lỗi khi tạo embedding cho query: {e}")
             return [0.0] * 768
 
-# Retrievals
+# FAISS Vector Store
 class FAISSVectorStore:
     def __init__(self, documents: List[Document], embedder: Embeddings):
         self.documents = documents
@@ -163,9 +150,9 @@ class FAISSVectorStore:
         return results
 
 # Web searching tool
-def web_search(query: str, num_results=3) -> List[str]:
+def web_search(query: str, num_results=10, api_key="b91e335ef3ef0b0f01dceef77c1c057d0d538bed") -> List[str]:
     encoded_query = urllib.parse.quote(query)
-    url = f"https://google.serper.dev/search?q={encoded_query}&apiKey={SERPER_API_KEY}"
+    url = f"https://google.serper.dev/search?q={encoded_query}&apiKey={api_key}"
     try:
         response = requests.get(url)
         json_data = response.json()
@@ -175,82 +162,3 @@ def web_search(query: str, num_results=3) -> List[str]:
     except Exception as e:
         logger.error(f"Lỗi khi tìm kiếm web: {e}")
         return ["(Không có kết quả web)"]
-
-# Router for suitable source
-def retriever_agent(query: str, vector_store: FAISSVectorStore) -> tuple[str, str, Optional[int]]:
-    query_lower = query.lower()
-    retrieved_docs = vector_store.retrieve(query_lower, top_k=3)
-    chunk_index = None
-    if not retrieved_docs:
-        logger.info("Không tìm thấy thông tin trong tài liệu. Định tuyến đến Web Search...")
-        return "web_search", "\n".join(web_search(query)), chunk_index
-    logger.info("Định tuyến đến Vector Store (PDF Documents)...")
-    context = "\n\n".join([f"Chunk {doc.metadata.get('index')}: {doc.page_content}" for doc in retrieved_docs])
-    chunk_index = retrieved_docs[0].metadata.get('index')
-    return "vector_store", context, chunk_index
-
-# Create agent for LLM
-def get_rag_agent() -> Agent:
-    agent = Agent(
-        name="Gemini RAG Agent",
-        model=Gemini(id="gemini-2.0-flash-thinking-exp-01-21"),
-        instructions=(
-            "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác dựa trên tài liệu.\n"
-            "Nếu thông tin đến từ tài liệu PDF, trích dẫn chi tiết và chính xác, kèm theo số trang nếu có.\n"
-            "Nếu thông tin đến từ web, hãy ghi rõ nguồn là 'Web Search'.\n"
-            "Khi có lịch sử trò chuyện trong bối cảnh (dưới dạng 'Lịch sử trò chuyện'), sử dụng thông tin từ lịch sử để trả lời các câu hỏi liên quan đến các câu hỏi trước đó hoặc các meta-câu hỏi về phiên làm việc (như 'câu hỏi đầu tiên' hoặc 'tôi vừa hỏi gì').\n"
-            "Nếu câu hỏi hỏi về việc liệu đây có phải câu hỏi đầu tiên trong phiên, kiểm tra lịch sử trò chuyện; nếu lịch sử rỗng, xác nhận đó là câu hỏi đầu tiên.\n"
-            "Trả lời bằng tiếng Việt, rõ ràng, dễ hiểu và đúng ngữ pháp."
-        ),
-        show_tool_calls=True,
-        markdown=True,
-    )
-    return agent
-
-# Main
-def main():
-    logger.info("Bắt đầu chương trình...")
-    print("Đang xử lý file PDF...")
-    documents = process_pdf(PDF_PATH)
-    print(f"Đã tạo {len(documents)} chunk từ file PDF.")
-    embedder = VietnameseEmbedder()
-    vector_store = FAISSVectorStore(documents, embedder)
-    rag_agent = get_rag_agent()
-    memory = PersistentMemory(db_path="../data/memory.db", max_history=10, embedder=embedder)
-    session_id = "user_session_1"
-
-    while True:
-        print("\nNhập câu hỏi của bạn (nhập 'thoát' để kết thúc): ")
-        query = input().strip().lower()
-        if not query or query == "thoát":
-            logger.info("Người dùng đã chọn thoát chương trình.")
-            print("Đã thoát chương trình.")
-            break
-
-        source, context, chunk_index = retriever_agent(query, vector_store)
-        memory_context = memory.get_context(query, session_id=session_id, chunk_index=chunk_index, max_rows=3)
-        if memory_context:
-            formatted_memory_context = memory_context.replace("\n", "\n- ")
-            context += f"\n\n**Lịch sử trò chuyện**:\n- {formatted_memory_context}"
-
-        print(f"\nNguồn: {source}")
-        try:
-            full_prompt = (
-                f"Bối cảnh: {context}\n\n"
-                f"Nguồn: {source}\n\n"
-                f"Câu hỏi: {query}\n\n"
-                "Hãy cung cấp một câu trả lời chi tiết dựa trên thông tin có sẵn."
-            )
-            logger.debug(f"Prompt gửi đến LLM:\n{full_prompt}")
-            print("\nĐang sinh câu trả lời...")
-            response = rag_agent.run(full_prompt)
-            answer = response.content
-            print("\n=== Câu trả lời ===")
-            print(answer)
-            memory.add_to_history(query, answer, session_id=session_id, chunk_index=chunk_index)
-        except Exception as e:
-            logger.error(f"Lỗi khi sinh câu trả lời: {e}")
-            print(f"Lỗi khi sinh câu trả lời: {e}")
-
-if __name__ == "__main__":
-    main()

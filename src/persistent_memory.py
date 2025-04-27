@@ -50,7 +50,7 @@ class PersistentMemory:
         except sqlite3.Error as e:
             logger.error(f"Lỗi khi thêm vào lịch sử: {e}")
 
-    def get_context(self, query: str, session_id: str = "default", chunk_index: Optional[int] = None, max_rows: int = 5) -> str:
+    def get_context(self, query: str, session_id: str = "default", chunk_index: Optional[int] = None, max_rows: int = 10) -> str:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()

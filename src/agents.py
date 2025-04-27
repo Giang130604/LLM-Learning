@@ -1,0 +1,255 @@
+import logging
+from typing import List, Optional
+from langchain_core.documents import Document
+from agno.agent import Agent
+from agno.models.google import Gemini
+from persistent_memory import PersistentMemory
+from utils import FAISSVectorStore, web_search
+import requests
+
+# Thiết lập logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+# Agent Retriever
+class RetrieverAgent:
+    def __init__(self, vector_store: FAISSVectorStore, llm_agent: Agent = None):
+        self.vector_store = vector_store
+        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+
+    def run(self, query: str) -> tuple[str, str, Optional[int]]:
+        try:
+            logger.info(f"[RetrieverAgent] Observation: Nhận câu hỏi: {query}")
+
+            # Sử dụng LLM để diễn giải câu hỏi
+            if self.llm_agent:
+                logger.info("[RetrieverAgent] Thought: Dùng LLM để diễn giải câu hỏi...")
+                prompt = f"Hãy diễn giải câu hỏi sau để tối ưu cho việc tìm kiếm tài liệu: {query}"
+                response = self.llm_agent.run(prompt)
+                optimized_query = response.content
+                logger.info(f"[RetrieverAgent] Câu hỏi đã được diễn giải: {optimized_query}")
+            else:
+                optimized_query = query
+
+            logger.info(
+                "[RetrieverAgent] Thought: Kiểm tra xem câu hỏi có thể được trả lời bằng tài liệu PDF hay không...")
+            retrieved_docs = self.vector_store.retrieve(optimized_query, top_k=3)
+            chunk_index = None
+            if not retrieved_docs:
+                logger.info("[RetrieverAgent] Action: Không tìm thấy tài liệu, định tuyến đến Web Search...")
+                return "web_search", "", chunk_index
+            logger.info("[RetrieverAgent] Action: Truy xuất tài liệu từ Vector Store...")
+            context = "\n\n".join([f"Chunk {doc.metadata.get('index')}: {doc.page_content}" for doc in retrieved_docs])
+            chunk_index = retrieved_docs[0].metadata.get('index')
+            logger.info("[RetrieverAgent] Evaluation: Tài liệu truy xuất thành công.")
+            return "vector_store", context, chunk_index
+        except Exception as e:
+            logger.error(f"[RetrieverAgent] Lỗi khi xử lý: {e}")
+            return "error", f"Lỗi khi truy xuất tài liệu: {e}", None
+
+
+# Agent Web Searcher
+class WebSearcherAgent:
+    def __init__(self, llm_agent: Agent = None):
+        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+
+    def run(self, query: str) -> str:
+        try:
+            logger.info(f"[WebSearcherAgent] Observation: Nhận yêu cầu tìm kiếm web cho câu hỏi: {query}")
+            logger.info("[WebSearcherAgent] Thought: Tạo truy vấn tìm kiếm web...")
+            logger.info("[WebSearcherAgent] Action: Gọi API tìm kiếm web...")
+            results = web_search(query)
+            context = "\n".join(results)
+
+            # Sử dụng LLM để tóm tắt kết quả
+            if self.llm_agent:
+                logger.info("[WebSearcherAgent] Thought: Dùng LLM để tóm tắt kết quả web...")
+                prompt = (
+                    f"Dưới đây là kết quả tìm kiếm web cho câu hỏi: {query}\n\n"
+                    f"Kết quả: {context}\n\n"
+                    "Hãy tóm tắt kết quả trên thành một đoạn văn ngắn, chỉ giữ lại thông tin quan trọng và loại bỏ phần không liên quan."
+                )
+                response = self.llm_agent.run(prompt)
+                summarized_context = response.content
+                logger.info("[WebSearcherAgent] Kết quả đã được tóm tắt.")
+            else:
+                summarized_context = context
+
+            logger.info("[WebSearcherAgent] Evaluation: Kết quả web đã được xử lý.")
+            return summarized_context
+        except Exception as e:
+            logger.error(f"[WebSearcherAgent] Lỗi khi tìm kiếm web: {e}")
+            return f"Lỗi khi tìm kiếm web: {e}"
+
+
+# Agent Memory Manager
+class MemoryManagerAgent:
+    def __init__(self, memory: PersistentMemory, llm_agent: Agent = None):
+        self.memory = memory
+        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+
+    def run(self, query: str, session_id: str, chunk_index: Optional[int]) -> str:
+        try:
+            logger.info(f"[MemoryManagerAgent] Observation: Nhận yêu cầu truy xuất lịch sử cho session: {session_id}")
+            logger.info("[MemoryManagerAgent] Thought: Truy xuất lịch sử liên quan...")
+            logger.info("[MemoryManagerAgent] Action: Gọi hàm get_context...")
+            raw_context = self.memory.get_context(query, session_id, chunk_index, max_rows=5)
+
+            # Sử dụng LLM để tóm tắt hoặc phân tích lịch sử
+            if self.llm_agent and raw_context:
+                logger.info("[MemoryManagerAgent] Thought: Dùng LLM để phân tích lịch sử...")
+                prompt = (
+                    f"Dưới đây là lịch sử trò chuyện:\n{raw_context}\n\n"
+                    f"Câu hỏi hiện tại: {query}\n\n"
+                    "Hãy tóm tắt lịch sử trò chuyện, chỉ giữ lại thông tin liên quan đến câu hỏi hiện tại."
+                )
+                response = self.llm_agent.run(prompt)
+                summarized_context = response.content
+                logger.info("[MemoryManagerAgent] Lịch sử đã được tóm tắt.")
+            else:
+                summarized_context = raw_context
+
+            logger.info("[MemoryManagerAgent] Evaluation: Lịch sử đã được xử lý.")
+            return summarized_context
+        except Exception as e:
+            logger.error(f"[MemoryManagerAgent] Lỗi khi truy xuất lịch sử: {e}")
+            return f"Lỗi khi truy xuất lịch sử: {e}"
+
+
+# Agent Answer
+class AnswerGeneratorAgent:
+    def __init__(self, llm_agent: Agent):
+        self.llm_agent = llm_agent
+
+    def run(self, query: str, context: str, source: str, memory_context: str) -> str:
+        try:
+            logger.info(f"[AnswerGeneratorAgent] Observation: Nhận câu hỏi và ngữ cảnh: {query}")
+            logger.info("[AnswerGeneratorAgent] Thought: Xây dựng prompt và tổ chức câu trả lời...")
+            full_prompt = (
+                f"Bối cảnh: {context}\n\n"
+                f"Lịch sử trò chuyện: {memory_context}\n\n"
+                f"Nguồn: {source}\n\n"
+                f"Câu hỏi: {query}\n\n"
+                "Hãy cung cấp một câu trả lời chi tiết dựa trên thông tin có sẵn."
+            )
+            logger.info("[AnswerGeneratorAgent] Action: Gọi LLM để sinh câu trả lời...")
+            response = self.llm_agent.run(full_prompt)
+            answer = response.content
+            logger.info("[AnswerGeneratorAgent] Evaluation: Câu trả lời đã được sinh ra.")
+            return answer
+        except Exception as e:
+            logger.error(f"[AnswerGeneratorAgent] Lỗi khi sinh câu trả lời: {e}")
+            return f"Lỗi khi sinh câu trả lời: {e}"
+
+
+# Agent Coordinator
+class CoordinatorAgent:
+    def __init__(self, retriever: RetrieverAgent, web_searcher: WebSearcherAgent, memory_manager: MemoryManagerAgent,
+                 answer_generator: AnswerGeneratorAgent, memory: PersistentMemory):
+        self.retriever = retriever
+        self.web_searcher = web_searcher
+        self.memory_manager = memory_manager
+        self.answer_generator = answer_generator
+        self.memory = memory
+
+    def run(self, query: str, session_id: str) -> str:
+        try:
+            logger.info(f"[CoordinatorAgent] Observation: Nhận câu hỏi từ người dùng: {query}")
+            logger.info("[CoordinatorAgent] Thought: Điều phối các agent để xử lý câu hỏi...")
+
+            # Bước 1: Gọi Agent Retriever
+            logger.info("[CoordinatorAgent] Action: Kích hoạt RetrieverAgent...")
+            source, context, chunk_index = self.retriever.run(query)
+            if source == "error":
+                logger.error("[CoordinatorAgent] Evaluation: RetrieverAgent trả về lỗi.")
+                return context
+
+            # Bước 2: Nếu cần tìm kiếm web, gọi Agent Web Searcher
+            if source == "web_search":
+                logger.info("[CoordinatorAgent] Action: Kích hoạt WebSearcherAgent...")
+                context = self.web_searcher.run(query)
+                if context.startswith("Lỗi"):
+                    logger.error("[CoordinatorAgent] Evaluation: WebSearcherAgent trả về lỗi.")
+                    return context
+
+            # Bước 3: Gọi Agent Memory Manager để lấy lịch sử
+            logger.info("[CoordinatorAgent] Action: Kích hoạt MemoryManagerAgent...")
+            memory_context = self.memory_manager.run(query, session_id, chunk_index)
+            if memory_context.startswith("Lỗi"):
+                logger.error("[CoordinatorAgent] Evaluation: MemoryManagerAgent trả về lỗi.")
+                return memory_context
+
+            # Bước 4: Gọi Agent Answer Generator để tạo câu trả lời
+            logger.info("[CoordinatorAgent] Action: Kích hoạt AnswerGeneratorAgent...")
+            answer = self.answer_generator.run(query, context, source, memory_context)
+            if answer.startswith("Lỗi"):
+                logger.error("[CoordinatorAgent] Evaluation: AnswerGeneratorAgent trả về lỗi.")
+                return answer
+
+            # Bước 5: Lưu câu trả lời vào lịch sử
+            logger.info("[CoordinatorAgent] Action: Lưu câu trả lời vào lịch sử...")
+            self.memory.add_to_history(query, answer, session_id, chunk_index)
+
+            logger.info("[CoordinatorAgent] Evaluation: Hoàn thành xử lý câu hỏi.")
+            return answer
+        except Exception as e:
+            logger.error(f"[CoordinatorAgent] Lỗi khi điều phối: {e}")
+            return f"Lỗi khi điều phối các agent: {e}"
+
+
+# Gemini LLM Agent
+def get_rag_agent() -> Agent:
+    try:
+        agent = Agent(
+            name="Gemini RAG Agent",
+            model=Gemini(id="gemini-2.0-flash-thinking-exp-01-21"),
+            instructions=(
+                "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác dựa trên tài liệu.\n"
+                "Nếu thông tin đến từ tài liệu PDF, trích dẫn chi tiết và chính xác, kèm theo số trang nếu có.\n"
+                "Nếu thông tin đến từ web, hãy ghi rõ nguồn là 'Web Search'.\n"
+                "Khi có lịch sử trò chuyện trong bối cảnh (dưới dạng 'Lịch sử trò chuyện'), sử dụng thông tin từ lịch sử để trả lời các câu hỏi liên quan đến các câu hỏi trước đó hoặc các meta-câu hỏi về phiên làm việc (như 'câu hỏi đầu tiên' hoặc 'tôi vừa hỏi gì').\n"
+                "Nếu câu hỏi hỏi về việc liệu đây có phải câu hỏi đầu tiên trong phiên, kiểm tra lịch sử trò chuyện; nếu lịch sử rỗng, xác nhận đó là câu hỏi đầu tiên.\n"
+                "Trả lời bằng tiếng Việt, rõ ràng, dễ hiểu và đúng ngữ pháp."
+            ),
+            show_tool_calls=True,
+            markdown=True,
+        )
+        logger.info("[get_rag_agent] Đã tạo RAG Agent thành công.")
+        return agent
+    except Exception as e:
+        logger.error(f"[get_rag_agent] Lỗi khi tạo RAG Agent: {e}")
+        raise
+
+
+# Ollama Agent
+def get_ollama_agent(model_name: str = "llama3") -> Agent:
+    class OllamaAgent(Agent):
+        def __init__(self, model_name: str):
+            self.model_name = model_name
+            self.base_url = "http://localhost:11434"  # Địa chỉ mặc định của Ollama
+
+        def run(self, prompt: str) -> type('Response', (), {'content': ''}):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json={
+                        "model": self.model_name,
+                        "prompt": prompt,
+                        "stream": False
+                    }
+                )
+                response.raise_for_status()
+                result = response.json()
+                return type('Response', (), {'content': result.get('response', 'Lỗi khi gọi Ollama')})()
+            except Exception as e:
+                logger.error(f"[OllamaAgent] Lỗi khi gọi Ollama: {e}")
+                return type('Response', (), {'content': f"Lỗi khi gọi Ollama: {e}"})()
+
+    try:
+        agent = OllamaAgent(model_name)
+        logger.info(f"[get_ollama_agent] Đã tạo Ollama Agent với mô hình {model_name} thành công.")
+        return agent
+    except Exception as e:
+        logger.error(f"[get_ollama_agent] Lỗi khi tạo Ollama Agent: {e}")
+        raise
