@@ -1,17 +1,19 @@
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from main import process_pdf, VietnameseEmbedder, FAISSVectorStore, retriever_agent, get_rag_agent
+from main import  VietnameseEmbedder, FAISSVectorStore, get_rag_agent
 from persistent_memory import PersistentMemory
 import shutil
 from typing import List
 import logging
 import sqlite3
+from mcp_client.client import MCPClient  # Import MCP Client
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
@@ -38,17 +40,15 @@ memory = PersistentMemory(db_path="../data/memory.db", max_history=25)
 embedder = None
 vector_store = None
 rag_agent = None
-
+mcp_client = MCPClient(server_url="http://localhost:8080")  # Khởi tạo MCP Client
 
 class QueryRequest(BaseModel):
     query: str
-
 
 class HistoryItem(BaseModel):
     query: str
     response: str
     timestamp: str
-
 
 @app.post("/upload_pdf")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -75,7 +75,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         logger.error(f"Lỗi khi xử lý PDF: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
     if not vector_store or not rag_agent:
@@ -85,12 +84,31 @@ async def ask_question(request: QueryRequest):
     session_id = "user_session_1"
 
     try:
-        # Truy xuất thông tin
-        source, context, chunk_index = retriever_agent(query, vector_store, memory, session_id)
+        # Truy xuất thông tin qua MCP Client
+        chunks = mcp_client.invoke(
+            "retrieve_chunks", {"question": query, "top_k": 3}
+        )
+        source = "vector_store" if chunks else "web_search"
+        chunk_index = None  # MCP Server không trả về chunk_index, để None
+
+        if not chunks:  # Fallback sang web search
+            snippets = mcp_client.invoke(
+                "web_search_tool", {"query": query, "num_results": 5}
+            )
+            chunks = snippets
+
+        context = "\n\n".join(chunks)
+
+        # Lấy lịch sử qua MCP Client
+        history_lines = mcp_client.invoke(
+            "memory_get", {"session_id": session_id, "max_rows": 5}
+        )
+        memory_context = "\n".join(history_lines)
 
         # Tạo prompt và gọi RAG agent
         full_prompt = (
             f"Bối cảnh: {context}\n\n"
+            f"Lịch sử trò chuyện: {memory_context}\n\n"
             f"Nguồn: {source}\n\n"
             f"Câu hỏi: {query}\n\n"
             "Hãy cung cấp một câu trả lời chi tiết dựa trên thông tin có sẵn."
@@ -99,30 +117,50 @@ async def ask_question(request: QueryRequest):
         response = rag_agent.run(full_prompt)
         answer = response.content
 
-        # Lưu vào lịch sử
-        memory.add_to_history(query, answer, session_id=session_id, chunk_index=chunk_index)
+        # Lưu vào lịch sử qua MCP Client
+        mcp_client.invoke(
+            "memory_add",
+            {
+                "session_id": session_id,
+                "query": query,
+                "answer": answer,
+                "chunk_index": chunk_index,
+            }
+        )
 
         return {"answer": answer}
     except Exception as e:
         logger.error(f"Lỗi khi xử lý câu hỏi: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/history", response_model=List[HistoryItem])
 async def get_history(page: int = 1, per_page: int = 25):
     session_id = "user_session_1"
-    offset = (page - 1) * per_page
     try:
-        with sqlite3.connect(memory.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT query, response, timestamp FROM history
-                WHERE session_id = ?
-                ORDER BY timestamp ASC
-                LIMIT ? OFFSET ?
-            """, (session_id, per_page, offset))
-            rows = cursor.fetchall()
-            return [{"query": row[0], "response": row[1], "timestamp": row[2]} for row in rows]
-    except sqlite3.Error as e:
+        # Lấy lịch sử qua MCP Client
+        history_lines = mcp_client.invoke(
+            "memory_get", {"session_id": session_id, "max_rows": per_page}
+        )
+        history_items = []
+        for line in history_lines:
+            # Parse history_lines thành định dạng HistoryItem
+            # Giả sử mỗi line có dạng "[timestamp] Query: ... Response: ..."
+            try:
+                timestamp_end = line.find("] Query: ")
+                if timestamp_end == -1:
+                    continue
+                timestamp = line[1:timestamp_end]
+                query_start = timestamp_end + len("] Query: ")
+                query_end = line.find("\nResponse: ")
+                if query_end == -1:
+                    continue
+                query = line[query_start:query_end]
+                response = line[query_end + len("\nResponse: "):]
+                history_items.append(HistoryItem(query=query, response=response, timestamp=timestamp))
+            except Exception as e:
+                logger.warning(f"Lỗi khi parse lịch sử: {line}, lỗi: {e}")
+                continue
+        return history_items
+    except Exception as e:
         logger.error(f"Lỗi khi lấy lịch sử: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import faiss
-from unstructured.partition.pdf import partition_pdf
+# from unstructured.partition.pdf import partition_pdf
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from datetime import datetime
@@ -12,6 +12,8 @@ import requests
 from sentence_transformers import SentenceTransformer
 import pickle
 import hashlib
+
+from unstructured.partition.pdf import partition_pdf
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)

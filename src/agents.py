@@ -1,9 +1,15 @@
+import sys
+import os
+
+# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import logging
 from typing import List, Optional
 from langchain_core.documents import Document
 from agno.agent import Agent
 from agno.models.google import Gemini
-from persistent_memory import PersistentMemory
+from persistent_memory import PersistentMemory  # Import từ thư mục gốc
 from utils import FAISSVectorStore, web_search
 import requests
 
@@ -16,25 +22,28 @@ logger = logging.getLogger(__name__)
 class RetrieverAgent:
     def __init__(self, vector_store: FAISSVectorStore, llm_agent: Agent = None):
         self.vector_store = vector_store
-        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+        self.llm_agent = llm_agent or get_ollama_agent()
 
     def run(self, query: str) -> tuple[str, str, Optional[int]]:
         try:
             logger.info(f"[RetrieverAgent] Observation: Nhận câu hỏi: {query}")
 
             # Sử dụng LLM để diễn giải câu hỏi
+            optimized_query = query
             if self.llm_agent:
                 logger.info("[RetrieverAgent] Thought: Dùng LLM để diễn giải câu hỏi...")
-                prompt = f"Hãy diễn giải câu hỏi sau để tối ưu cho việc tìm kiếm tài liệu: {query}"
+                prompt = f"Hãy diễn giải ngắn gọn (tiếng Việt) câu hỏi sau để tối ưu tìm kiếm tài liệu: {query}"
                 response = self.llm_agent.run(prompt)
-                optimized_query = response.content
-                logger.info(f"[RetrieverAgent] Câu hỏi đã được diễn giải: {optimized_query}")
-            else:
-                optimized_query = query
+                candidate = (response.content or "").strip()
+                if candidate and "Lỗi" not in candidate and len(candidate) <= 200:
+                    optimized_query = candidate
+                    logger.info(f"[RetrieverAgent] Câu hỏi đã được diễn giải: {optimized_query}")
+                else:
+                    logger.warning("[RetrieverAgent] Diễn giải không hợp lệ hoặc quá dài, dùng câu hỏi gốc.")
 
             logger.info(
                 "[RetrieverAgent] Thought: Kiểm tra xem câu hỏi có thể được trả lời bằng tài liệu PDF hay không...")
-            retrieved_docs = self.vector_store.retrieve(optimized_query, top_k=3)
+            retrieved_docs = self.vector_store.retrieve(optimized_query, top_k=5)
             chunk_index = None
             if not retrieved_docs:
                 logger.info("[RetrieverAgent] Action: Không tìm thấy tài liệu, định tuyến đến Web Search...")
@@ -52,7 +61,7 @@ class RetrieverAgent:
 # Agent Web Searcher
 class WebSearcherAgent:
     def __init__(self, llm_agent: Agent = None):
-        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+        self.llm_agent = llm_agent or get_ollama_agent()
 
     def run(self, query: str) -> str:
         try:
@@ -87,7 +96,7 @@ class WebSearcherAgent:
 class MemoryManagerAgent:
     def __init__(self, memory: PersistentMemory, llm_agent: Agent = None):
         self.memory = memory
-        self.llm_agent = llm_agent or get_ollama_agent()  # Sử dụng Ollama
+        self.llm_agent = llm_agent or get_ollama_agent()
 
     def run(self, query: str, session_id: str, chunk_index: Optional[int]) -> str:
         try:
@@ -117,7 +126,7 @@ class MemoryManagerAgent:
             return f"Lỗi khi truy xuất lịch sử: {e}"
 
 
-# Agent Answer
+# Agent Answer Generator
 class AnswerGeneratorAgent:
     def __init__(self, llm_agent: Agent):
         self.llm_agent = llm_agent
@@ -131,7 +140,7 @@ class AnswerGeneratorAgent:
                 f"Lịch sử trò chuyện: {memory_context}\n\n"
                 f"Nguồn: {source}\n\n"
                 f"Câu hỏi: {query}\n\n"
-                "Hãy cung cấp một câu trả lời chi tiết dựa trên thông tin có sẵn."
+                "Chỉ sử dụng thông tin từ Bối cảnh để trả lời chính. Lịch sử chỉ để tham chiếu ngữ cảnh hội thoại, không được ghi đè thông tin mới trong Bối cảnh. Nếu Bối cảnh có thông tin thì trả lời theo Bối cảnh. Nếu Bối cảnh trống, mới dùng thông tin từ Lịch sử. Trả lời ngắn gọn, tiếng Việt."
             )
             logger.info("[AnswerGeneratorAgent] Action: Gọi LLM để sinh câu trả lời...")
             response = self.llm_agent.run(full_prompt)
@@ -203,7 +212,7 @@ def get_rag_agent() -> Agent:
     try:
         agent = Agent(
             name="Gemini RAG Agent",
-            model=Gemini(id="gemini-2.0-flash-thinking-exp-01-21"),
+            model=Gemini(id="gemini-2.5-flash"),
             instructions=(
                 "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác dựa trên tài liệu.\n"
                 "Nếu thông tin đến từ tài liệu PDF, trích dẫn chi tiết và chính xác, kèm theo số trang nếu có.\n"
@@ -212,7 +221,6 @@ def get_rag_agent() -> Agent:
                 "Nếu câu hỏi hỏi về việc liệu đây có phải câu hỏi đầu tiên trong phiên, kiểm tra lịch sử trò chuyện; nếu lịch sử rỗng, xác nhận đó là câu hỏi đầu tiên.\n"
                 "Trả lời bằng tiếng Việt, rõ ràng, dễ hiểu và đúng ngữ pháp."
             ),
-            show_tool_calls=True,
             markdown=True,
         )
         logger.info("[get_rag_agent] Đã tạo RAG Agent thành công.")
@@ -227,7 +235,7 @@ def get_ollama_agent(model_name: str = "llama3") -> Agent:
     class OllamaAgent(Agent):
         def __init__(self, model_name: str):
             self.model_name = model_name
-            self.base_url = "http://localhost:11434"  # Địa chỉ mặc định của Ollama
+            self.base_url = "http://localhost:11434"
 
         def run(self, prompt: str) -> type('Response', (), {'content': ''}):
             try:

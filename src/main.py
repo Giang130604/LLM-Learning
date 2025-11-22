@@ -1,7 +1,12 @@
+import sys
 import os
+
+# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import google.generativeai as genai
 import logging
-from utils import process_pdf, VietnameseEmbedder, FAISSVectorStore
+from utils import  VietnameseEmbedder, FAISSVectorStore, process_pdf
 from agents import RetrieverAgent, WebSearcherAgent, MemoryManagerAgent, AnswerGeneratorAgent, CoordinatorAgent, get_rag_agent, get_ollama_agent
 from persistent_memory import PersistentMemory
 
@@ -10,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cấu hình API
-GEMINI_API_KEY = "AIzaSyCSkPtzL-dI1fgxjCDDvBYxaDYA8z529uQ"
+GEMINI_API_KEY = "AIzaSyD3QiNM7lEOgDBP5Sg7qzrmRm3XOeRaBzw"
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 
