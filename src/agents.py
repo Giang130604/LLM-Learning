@@ -1,7 +1,6 @@
 import sys
 import os
 
-# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import logging
@@ -9,11 +8,10 @@ from typing import List, Optional
 from langchain_core.documents import Document
 from agno.agent import Agent
 from agno.models.google import Gemini
-from persistent_memory import PersistentMemory  # Import từ thư mục gốc
+from persistent_memory import PersistentMemory  
 from utils import FAISSVectorStore, web_search
 import requests
 
-# Thiết lập logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,14 +25,13 @@ class RetrieverAgent:
     def run(self, query: str) -> tuple[str, str, Optional[int]]:
         try:
             logger.info(f"[RetrieverAgent] Observation: Nhận câu hỏi: {query}")
-
-            # Sử dụng LLM để diễn giải câu hỏi
             optimized_query = query
             if self.llm_agent:
                 logger.info("[RetrieverAgent] Thought: Dùng LLM để diễn giải câu hỏi...")
                 prompt = f"Hãy diễn giải ngắn gọn (tiếng Việt) câu hỏi sau để tối ưu tìm kiếm tài liệu: {query}"
                 response = self.llm_agent.run(prompt)
                 candidate = (response.content or "").strip()
+                logger.info(f"[RetrieverAgent] [DEBUG] LLM response candidate: {candidate[:200] if candidate else 'None'}...")
                 if candidate and "Lỗi" not in candidate and len(candidate) <= 200:
                     optimized_query = candidate
                     logger.info(f"[RetrieverAgent] Câu hỏi đã được diễn giải: {optimized_query}")
@@ -43,14 +40,23 @@ class RetrieverAgent:
 
             logger.info(
                 "[RetrieverAgent] Thought: Kiểm tra xem câu hỏi có thể được trả lời bằng tài liệu PDF hay không...")
+            logger.info(f"[RetrieverAgent] [DEBUG] Query sử dụng cho retrieval: '{optimized_query}'")
+            
             retrieved_docs = self.vector_store.retrieve(optimized_query, top_k=5)
+            logger.info(f"[RetrieverAgent] [DEBUG] Số documents được retrieve: {len(retrieved_docs)}")
+            
             chunk_index = None
             if not retrieved_docs:
+                logger.info("[RetrieverAgent] [DEBUG] retrieved_docs is empty, fallback to web search")
                 logger.info("[RetrieverAgent] Action: Không tìm thấy tài liệu, định tuyến đến Web Search...")
                 return "web_search", "", chunk_index
+            
+            logger.info(f"[RetrieverAgent] [DEBUG] Tìm thấy {len(retrieved_docs)} documents, chuẩn bị trả về context")
             logger.info("[RetrieverAgent] Action: Truy xuất tài liệu từ Vector Store...")
             context = "\n\n".join([f"Chunk {doc.metadata.get('index')}: {doc.page_content}" for doc in retrieved_docs])
             chunk_index = retrieved_docs[0].metadata.get('index')
+            logger.info(f"[RetrieverAgent] [DEBUG] Context length: {len(context)} characters")
+            logger.info(f"[RetrieverAgent] [DEBUG] First chunk index: {chunk_index}")
             logger.info("[RetrieverAgent] Evaluation: Tài liệu truy xuất thành công.")
             return "vector_store", context, chunk_index
         except Exception as e:
@@ -70,8 +76,6 @@ class WebSearcherAgent:
             logger.info("[WebSearcherAgent] Action: Gọi API tìm kiếm web...")
             results = web_search(query)
             context = "\n".join(results)
-
-            # Sử dụng LLM để tóm tắt kết quả
             if self.llm_agent:
                 logger.info("[WebSearcherAgent] Thought: Dùng LLM để tóm tắt kết quả web...")
                 prompt = (
@@ -104,8 +108,6 @@ class MemoryManagerAgent:
             logger.info("[MemoryManagerAgent] Thought: Truy xuất lịch sử liên quan...")
             logger.info("[MemoryManagerAgent] Action: Gọi hàm get_context...")
             raw_context = self.memory.get_context(query, session_id, chunk_index, max_rows=5)
-
-            # Sử dụng LLM để tóm tắt hoặc phân tích lịch sử
             if self.llm_agent and raw_context:
                 logger.info("[MemoryManagerAgent] Thought: Dùng LLM để phân tích lịch sử...")
                 prompt = (
@@ -167,14 +169,12 @@ class CoordinatorAgent:
             logger.info(f"[CoordinatorAgent] Observation: Nhận câu hỏi từ người dùng: {query}")
             logger.info("[CoordinatorAgent] Thought: Điều phối các agent để xử lý câu hỏi...")
 
-            # Bước 1: Gọi Agent Retriever
             logger.info("[CoordinatorAgent] Action: Kích hoạt RetrieverAgent...")
             source, context, chunk_index = self.retriever.run(query)
             if source == "error":
                 logger.error("[CoordinatorAgent] Evaluation: RetrieverAgent trả về lỗi.")
                 return context
 
-            # Bước 2: Nếu cần tìm kiếm web, gọi Agent Web Searcher
             if source == "web_search":
                 logger.info("[CoordinatorAgent] Action: Kích hoạt WebSearcherAgent...")
                 context = self.web_searcher.run(query)
@@ -182,21 +182,18 @@ class CoordinatorAgent:
                     logger.error("[CoordinatorAgent] Evaluation: WebSearcherAgent trả về lỗi.")
                     return context
 
-            # Bước 3: Gọi Agent Memory Manager để lấy lịch sử
             logger.info("[CoordinatorAgent] Action: Kích hoạt MemoryManagerAgent...")
             memory_context = self.memory_manager.run(query, session_id, chunk_index)
             if memory_context.startswith("Lỗi"):
                 logger.error("[CoordinatorAgent] Evaluation: MemoryManagerAgent trả về lỗi.")
                 return memory_context
 
-            # Bước 4: Gọi Agent Answer Generator để tạo câu trả lời
             logger.info("[CoordinatorAgent] Action: Kích hoạt AnswerGeneratorAgent...")
             answer = self.answer_generator.run(query, context, source, memory_context)
             if answer.startswith("Lỗi"):
                 logger.error("[CoordinatorAgent] Evaluation: AnswerGeneratorAgent trả về lỗi.")
                 return answer
 
-            # Bước 5: Lưu câu trả lời vào lịch sử
             logger.info("[CoordinatorAgent] Action: Lưu câu trả lời vào lịch sử...")
             self.memory.add_to_history(query, answer, session_id, chunk_index)
 
@@ -214,7 +211,7 @@ def get_rag_agent() -> Agent:
             name="Gemini RAG Agent",
             model=Gemini(id="gemini-2.5-flash"),
             instructions=(
-                "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác dựa trên tài liệu.\n"
+                "Bạn là một đại lý thông minh chuyên cung cấp câu trả lời chính xác chủ yếu dựa trên tài liệu.\n"
                 "Nếu thông tin đến từ tài liệu PDF, trích dẫn chi tiết và chính xác, kèm theo số trang nếu có.\n"
                 "Nếu thông tin đến từ web, hãy ghi rõ nguồn là 'Web Search'.\n"
                 "Khi có lịch sử trò chuyện trong bối cảnh (dưới dạng 'Lịch sử trò chuyện'), sử dụng thông tin từ lịch sử để trả lời các câu hỏi liên quan đến các câu hỏi trước đó hoặc các meta-câu hỏi về phiên làm việc (như 'câu hỏi đầu tiên' hoặc 'tôi vừa hỏi gì').\n"

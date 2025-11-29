@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cấu hình API
-GEMINI_API_KEY = "AIzaSyD3QiNM7lEOgDBP5Sg7qzrmRm3XOeRaBzw"
+GEMINI_API_KEY = "AIzaSyCpH0z5chYiTwNt0OITLmuifbPhbDugjQU"
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -36,8 +36,8 @@ def main():
     try:
         embedder = VietnameseEmbedder()
         vector_store = FAISSVectorStore(documents, embedder)
-        gemini_agent = get_rag_agent()  # Gemini cho AnswerGeneratorAgent
-        ollama_agent = get_ollama_agent(model_name="llama3")  # Ollama cho các agent khác
+        gemini_agent = get_rag_agent()  
+        ollama_agent = get_ollama_agent(model_name="llama3") 
         memory = PersistentMemory(db_path="../data/memory.db", max_history=10, embedder=embedder)
     except Exception as e:
         logger.error(f"Lỗi khi khởi tạo thành phần: {e}")
@@ -46,10 +46,10 @@ def main():
 
     # Khởi tạo các agent
     try:
-        retriever_agent = RetrieverAgent(vector_store, ollama_agent)  # Sử dụng Ollama
-        web_searcher_agent = WebSearcherAgent(ollama_agent)  # Sử dụng Ollama
-        memory_manager_agent = MemoryManagerAgent(memory, ollama_agent)  # Sử dụng Ollama
-        answer_generator_agent = AnswerGeneratorAgent(gemini_agent)  # Vẫn dùng Gemini
+        retriever_agent = RetrieverAgent(vector_store, ollama_agent)  
+        web_searcher_agent = WebSearcherAgent(ollama_agent)  
+        memory_manager_agent = MemoryManagerAgent(memory, ollama_agent) 
+        answer_generator_agent = AnswerGeneratorAgent(gemini_agent)  
         coordinator_agent = CoordinatorAgent(
             retriever_agent,
             web_searcher_agent,
@@ -64,7 +64,6 @@ def main():
 
     session_id = "user_session_1"
 
-    # Vòng lặp chính
     while True:
         print("\nNhập câu hỏi của bạn (nhập 'thoát' để kết thúc): ")
         query = input().strip().lower()
