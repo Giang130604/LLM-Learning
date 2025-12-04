@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cấu hình API
-GEMINI_API_KEY = "AIzaSyCpH0z5chYiTwNt0OITLmuifbPhbDugjQU"
+GEMINI_API_KEY = "AIzaSyCTI6rwv6M2_1fa_RRK8ZEd7T8hvMwDWm0"
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 

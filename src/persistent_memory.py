@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 from typing import Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,9 @@ class PersistentMemory:
 
     def _init_db(self):
         try:
+            # Đảm bảo thư mục chứa database tồn tại
+            db_parent = Path(self.db_path).resolve().parent
+            db_parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""

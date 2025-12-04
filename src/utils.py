@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import numpy as np
 import faiss
 # from unstructured.partition.pdf import partition_pdf
@@ -20,11 +21,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.3  
-CACHE_DIR = "../data/cache"
+# Đường dẫn tuyệt đối tới thư mục cache (tránh lệch CWD giữa app và MCP)
+BASE_DIR = Path(__file__).resolve().parent.parent
+CACHE_DIR = BASE_DIR / "data" / "cache"
 
 # Tạo thư mục cache
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Helper: Tính MD5 hash của file
 def get_file_hash(file_path: str) -> str:

@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 
 # Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -8,6 +9,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from main import  VietnameseEmbedder, FAISSVectorStore, get_rag_agent
+from utils import process_pdf
 from persistent_memory import PersistentMemory
 import shutil
 from typing import List
@@ -30,17 +32,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Đường dẫn lưu PDF
-PDF_DIR = "../data/pdfs"
-PDF_PATH = os.path.join(PDF_DIR, "uploaded.pdf")
+# Đường dẫn lưu PDF (tuyệt đối, tránh lệch CWD)
+BASE_DIR = Path(__file__).resolve().parent.parent
+PDF_DIR = BASE_DIR / "data" / "pdfs"
+PDF_PATH = PDF_DIR / "uploaded.pdf"
 os.makedirs(PDF_DIR, exist_ok=True)
 
 # Khởi tạo global variables
-memory = PersistentMemory(db_path="../data/memory.db", max_history=25)
+memory = PersistentMemory(db_path=str(BASE_DIR / "data" / "memory.db"), max_history=25)
 embedder = None
 vector_store = None
 rag_agent = None
-mcp_client = MCPClient(server_url="http://localhost:8080")  # Khởi tạo MCP Client
+# Đọc MCP endpoint từ env (MCP_SERVER_URL) hoặc mặc định http://localhost:8000
+mcp_client = MCPClient()
 
 class QueryRequest(BaseModel):
     query: str
@@ -62,7 +66,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
 
         # Xử lý PDF
-        documents = process_pdf(PDF_PATH)
+        documents = process_pdf(str(PDF_PATH))
         logger.info(f"Đã xử lý PDF, tạo {len(documents)} chunks")
 
         # Khởi tạo embedder và vector store

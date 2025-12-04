@@ -7,13 +7,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import logging
 from agents import *  # Import từ thư mục src/
 from mcp_client.client import MCPClient
-GEMINI_API_KEY = "AIzaSyCSkPtzL-dI1fgxjCDDvBYxaDYA8z529uQ"
+GEMINI_API_KEY = "AIzaSyCTI6rwv6M2_1fa_RRK8ZEd7T8hvMwDWm0"
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 logger = logging.getLogger(__name__)
 
 class RAGPlanner:
-    def __init__(self, mcp_server="http://localhost:8080"):
+    def __init__(self, mcp_server=None):
         self.mcp = MCPClient(mcp_server)
         self.answer_llm = AnswerGeneratorAgent(get_rag_agent())
 

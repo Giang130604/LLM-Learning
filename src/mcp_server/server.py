@@ -1,11 +1,8 @@
-"""
-MCP-Server: quảng bá toàn bộ “tay chân” cho RAG
-Chạy:  uvicorn mcp_server.server:app --reload --port 8080
-"""
+
 import sys
 import os
+from pathlib import Path
 
-# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from typing import List
@@ -13,15 +10,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import logging
 
-# Import trực tiếp từ thư mục gốc
-from utils import web_search, VietnameseEmbedder, FAISSVectorStore
+from utils import web_search, VietnameseEmbedder, FAISSVectorStore, process_pdf
 from persistent_memory import PersistentMemory
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === MCP infra tối giản (registry + discover + invoke) ===========
 app = FastAPI(title="RAG-Tools MCP Server")
 
 TOOL_REGISTRY = {}
@@ -68,42 +63,42 @@ def web_search_tool(query: str, num_results: int = 10) -> List[str]:
         logger.error(f"Error in web_search_tool: {str(e)}")
         raise
 
-# Cache vector-store trong RAM server để không load lại mỗi call
+BASE_DIR = Path(__file__).resolve().parents[2]
+PDF_PATH = BASE_DIR / "data" / "pdfs" / "uploaded.pdf"
+MEMORY_DB = BASE_DIR / "data" / "memory.db"
+
 _docs_cache = None
 _store_cache = None
-_embedder = None  # Khởi tạo embedder khi cần
-@mcp_
+_embedder = None  
+
 @mcp_tool("retrieve_chunks")
 def retrieve_chunks(question: str, top_k: int = 3) -> List[str]:
-    logger.info("Tạm thời bỏ qua xử lý PDF do lỗi MemoryError")
-    return ["Tạm thời không xử lý PDF"]  # Giá trị giả lập
-# @mcp_tool("retrieve_chunks")
-# def retrieve_chunks(question: str, top_k: int = 3) -> List[str]:
-#     """Truy xuất các đoạn PDF liên quan"""
-#     global _docs_cache, _store_cache, _embedder
-#     try:
-#         if _docs_cache is None:
-#             logger.info("Initializing document cache and vector store...")
-#             _docs_cache = process_pdf("../data/pdfs/uploaded.pdf")
-#             if not _docs_cache:
-#                 logger.warning("No documents retrieved from PDF.")
-#                 return []
-#             _embedder = VietnameseEmbedder()
-#             _store_cache = FAISSVectorStore(_docs_cache, _embedder)
-#             logger.info("Document cache and vector store initialized.")
-#
-#         logger.info(f"Retrieving chunks for question: {question}")
-#         chunks = _store_cache.retrieve(question, top_k=top_k)
-#         result = [c.page_content for c in chunks]
-#         logger.info(f"Retrieved {len(result)} chunks.")
-#         return result
-#     except Exception as e:
-#         logger.error(f"Error in retrieve_chunks: {str(e)}")
-#         raise
+    """Truy xuất các đoạn PDF liên quan bằng vector store được cache."""
+    global _docs_cache, _store_cache, _embedder
+    try:
+        if _docs_cache is None:
+            logger.info(f"Initializing document cache và vector store từ {PDF_PATH} ...")
+            _docs_cache = process_pdf(str(PDF_PATH))
+            if not _docs_cache:
+                logger.warning("No documents retrieved from PDF.")
+                return []
+            _embedder = VietnameseEmbedder()
+            _store_cache = FAISSVectorStore(_docs_cache, _embedder)
+            logger.info("Document cache và vector store đã sẵn sàng.")
 
-# Sử dụng PersistentMemory như storage chia sẻ
-# Đường dẫn tới memory.db từ thư mục gốc
-_memory = PersistentMemory(db_path="../data/memory.db", max_history=25)
+        logger.info(f"Retrieving chunks for question: {question}")
+        chunks = _store_cache.retrieve(question, top_k=top_k)
+        result = [c.page_content for c in chunks]
+        logger.info(f"Retrieved {len(result)} chunks.")
+        return result
+    except MemoryError:
+        logger.error("MemoryError khi build hoặc query vector store.")
+        return []
+    except Exception as e:
+        logger.error(f"Error in retrieve_chunks: {str(e)}")
+        raise
+
+_memory = PersistentMemory(db_path=str(MEMORY_DB), max_history=25)
 
 @mcp_tool("memory_get")
 def memory_get(session_id: str, max_rows: int = 10) -> List[str]:
@@ -134,4 +129,3 @@ def memory_add(
     except Exception as e:
         logger.error(f"Error in memory_add: {str(e)}")
         raise
-# ================================================================
