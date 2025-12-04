@@ -9,13 +9,17 @@ import logging
 from utils import  VietnameseEmbedder, FAISSVectorStore, process_pdf
 from agents import RetrieverAgent, WebSearcherAgent, MemoryManagerAgent, AnswerGeneratorAgent, CoordinatorAgent, get_rag_agent, get_ollama_agent
 from persistent_memory import PersistentMemory
+from env_loader import load_env
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cấu hình API
-GEMINI_API_KEY = "AIzaSyCTI6rwv6M2_1fa_RRK8ZEd7T8hvMwDWm0"
+load_env()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY is not set. Add it to .env or environment variables.")
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 

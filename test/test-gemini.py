@@ -1,35 +1,39 @@
+import os
+import sys
+import pathlib
 from google import genai
 from google.genai import types
-import pathlib
 
-# Khởi tạo client Gemini
-client = genai.Client(api_key="AIzaSyCSkPtzL-dI1fgxjCDDvBYxaDYA8z529uQ")  # Thay bằng API key thực tế của bạn
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
+from env_loader import load_env  # noqa: E402
+
+
+load_env()
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError("GEMINI_API_KEY is not set. Add it to .env or environment variables.")
+
+client = genai.Client(api_key=api_key)
 
 # Đường dẫn đến tệp PDF cục bộ
-local_pdf_path = "../data/pdfs/SỔ TAY HỌC VỤ KỲ I NĂM 2023-2024.pdf"  # Thay bằng đường dẫn thực tế đến tệp PDF của bạn
-
-# Đọc tệp PDF từ đường dẫn cục bộ
+local_pdf_path = "../data/pdfs/your.pdf"  # Thay bằng đường dẫn thực tế đến tệp PDF của bạn
 filepath = pathlib.Path(local_pdf_path)
 
-# Kiểm tra xem tệp có tồn tại không
 if not filepath.exists():
     print(f"Tệp {local_pdf_path} không tồn tại. Vui lòng kiểm tra lại đường dẫn.")
-    exit(1)
+    raise SystemExit(1)
 
-# Tạo prompt để yêu cầu tóm tắt
-prompt = "Nói lại chi tiết về lịch ở trang 7 tài liệu này"
+prompt = "Nói lại chi tiết về lịch Ý trang 7 tài liệu này"
 
-# Gửi yêu cầu đến Gemini API
 response = client.models.generate_content(
     model="gemini-1.5-flash",
     contents=[
         types.Part.from_bytes(
             data=filepath.read_bytes(),
-            mime_type='application/pdf',
+            mime_type="application/pdf",
         ),
-        prompt
-    ]
+        prompt,
+    ],
 )
 
-# In kết quả tóm tắt
 print(response.text)

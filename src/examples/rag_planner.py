@@ -1,19 +1,27 @@
-import sys
 import os
-import google.generativeai as genai
-# Thêm thư mục gốc (D:\LLM\LLM Learning\) vào sys.path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+import sys
 import logging
-from agents import *  # Import từ thư mục src/
-from mcp_client.client import MCPClient
-GEMINI_API_KEY = "AIzaSyCTI6rwv6M2_1fa_RRK8ZEd7T8hvMwDWm0"
+import google.generativeai as genai
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from agents import AnswerGeneratorAgent, get_rag_agent  
+from mcp_client.client import MCPClient  
+from env_loader import load_env  
+
+
+load_env()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY is not set. Add it to .env or environment variables.")
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
+
 logger = logging.getLogger(__name__)
 
+
 class RAGPlanner:
-    def __init__(self, mcp_server=None):
+    def __init__(self, mcp_server: str | None = None):
         self.mcp = MCPClient(mcp_server)
         self.answer_llm = AnswerGeneratorAgent(get_rag_agent())
 
@@ -36,7 +44,7 @@ class RAGPlanner:
             snippets = self.mcp.invoke(
                 "web_search_tool", {"query": query, "num_results": 5}
             )
-            chunks = snippets  # Dùng snippets làm context
+            chunks = snippets  # Đang snippets làm context
 
         context = "\n\n".join(chunks)
 
@@ -45,7 +53,7 @@ class RAGPlanner:
             query=query,
             context=context,
             source=source,
-            memory_context=history_ctx
+            memory_context=history_ctx,
         )
 
         # 4) Lưu vào memory qua MCP

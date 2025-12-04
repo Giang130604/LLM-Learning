@@ -28,3 +28,6 @@ Thumbs.db
 *.zip
 *.csv
 data/
+.env
+.env.local
+env/
