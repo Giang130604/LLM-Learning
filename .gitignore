@@ -31,3 +31,7 @@ data/
 .env
 .env.local
 env/
+node_modules/
+frontend/node_modules/
+# Figures extracted from PDF
+figures/
