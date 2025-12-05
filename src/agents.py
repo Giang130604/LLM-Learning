@@ -4,133 +4,50 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import logging
+import json
 from typing import List, Optional
 from langchain_core.documents import Document
 from agno.agent import Agent
 from agno.models.google import Gemini
 import requests
 from mcp_client.client import MCPClient
-
-# Legacy/local dependencies (kept for CLI agents)
 from persistent_memory import PersistentMemory
 from utils import FAISSVectorStore, web_search
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === MCP-backed lightweight agents =================================
-class McpRetrieverAgent:
-    def __init__(self, mcp: MCPClient | None = None):
-        self.mcp = mcp or MCPClient()
-
-    def run(self, query: str, top_k: int = 3) -> tuple[str, str, None]:
-        try:
-            logger.info(f"[McpRetriever] Action: retrieve_chunks via MCP, query='{query}'")
-            chunks: list[str] = self.mcp.invoke("retrieve_chunks", {"question": query, "top_k": top_k})
-            if not chunks:
-                logger.info("[McpRetriever] No chunks -> fallback to web_search")
-                return "web_search", "", None
-            context = "\n\n".join(chunks)
-            return "vector_store", context, None
-        except Exception as e:
-            logger.error(f"[McpRetriever] Error: {e}")
-            return "error", f"Lỗi khi truy xuất tài liệu: {e}", None
+from mcp_tools import tool_retrieve, tool_web_search, tool_memory_get, tool_memory_add  
 
 
-class McpWebSearcherAgent:
-    def __init__(self, mcp: MCPClient | None = None, llm_agent: Agent | None = None):
-        self.mcp = mcp or MCPClient()
-        # Cho phép không dùng LLM tóm tắt (tránh phụ thuộc Ollama nếu không chạy)
-        self.llm_agent = llm_agent
-
-    def run(self, query: str) -> str:
-        try:
-            logger.info(f"[McpWebSearcher] Action: web_search_tool via MCP, query='{query}'")
-            results: list[str] = self.mcp.invoke("web_search_tool", {"query": query, "num_results": 5})
-            context = "\n".join(results)
-            if self.llm_agent:
-                prompt = (
-                    f"Kết quả web cho: {query}\n\n{context}\n\n"
-                    "Tóm tắt ngắn gọn, giữ thông tin quan trọng, bỏ phần thừa. Tiếng Việt."
-                )
-                resp = self.llm_agent.run(prompt)
-                return resp.content
-            return context
-        except Exception as e:
-            logger.error(f"[McpWebSearcher] Error: {e}")
-            return f"Lỗi khi tìm kiếm web: {e}"
 
 
-class McpMemoryManagerAgent:
-    def __init__(self, mcp: MCPClient | None = None, llm_agent: Agent | None = None):
-        self.mcp = mcp or MCPClient()
-        # Cho phép không dùng LLM tóm tắt (tránh phụ thuộc Ollama nếu không chạy)
-        self.llm_agent = llm_agent
+# Planner Agent (tool-calling, trả JSON)
+def get_mcp_planner_agent(allow_web_search: bool = False) -> Agent:
+    """
+    Agent dùng tool MCP để lấy context/history. Trả về JSON:
+    {"source": "vector_store|web_search|error", "context": "...", "memory": "..."}
+    """
+    tools = [tool_retrieve, tool_memory_get]
+    web_msg = "Bạn không được dùng web_search_tool."
+    if allow_web_search:
+        tools.insert(1, tool_web_search)
+        web_msg = "Nếu retrieve không đủ, bạn có thể dùng web_search_tool."
 
-    def run(self, query: str, session_id: str, chunk_index: int | None) -> str:
-        try:
-            logger.info(f"[McpMemory] Action: memory_get via MCP, session={session_id}")
-            lines: list[str] = self.mcp.invoke("memory_get", {"session_id": session_id, "max_rows": 5})
-            raw_context = "\n".join(lines)
-            if self.llm_agent and raw_context:
-                prompt = (
-                    f"Lịch sử hội thoại:\n{raw_context}\n\n"
-                    f"Câu hỏi hiện tại: {query}\n\n"
-                    "Tóm tắt ngắn gọn, chỉ giữ nội dung liên quan câu hỏi hiện tại."
-                )
-                resp = self.llm_agent.run(prompt)
-                return resp.content
-            return raw_context
-        except Exception as e:
-            logger.error(f"[McpMemory] Error: {e}")
-            return f"Lỗi khi truy xuất lịch sử: {e}"
-
-
-class McpCoordinatorAgent:
-    def __init__(
-        self,
-        mcp: MCPClient | None = None,
-        answer_llm: Agent | None = None,
-        summarizer_agent: Agent | None = None,
-    ):
-        self.mcp = mcp or MCPClient()
-        self.retriever = McpRetrieverAgent(self.mcp)
-        self.web_searcher = McpWebSearcherAgent(self.mcp, llm_agent=summarizer_agent)
-        self.memory_manager = McpMemoryManagerAgent(self.mcp, llm_agent=summarizer_agent)
-        self.answer_generator = answer_llm or AnswerGeneratorAgent(get_rag_agent())
-
-    def run(self, query: str, session_id: str) -> str:
-        try:
-            source, context, chunk_index = self.retriever.run(query)
-            if source == "error":
-                return context
-            if source == "web_search":
-                context = self.web_searcher.run(query)
-                if context.startswith("Lỗi"):
-                    return context
-
-            memory_context = self.memory_manager.run(query, session_id, chunk_index)
-            if memory_context.startswith("Lỗi"):
-                return memory_context
-
-            answer = self.answer_generator.run(query, context, source, memory_context)
-            if answer.startswith("Lỗi"):
-                return answer
-
-            # Lưu vào memory qua MCP
-            self.mcp.invoke(
-                "memory_add",
-                {
-                    "session_id": session_id,
-                    "query": query,
-                    "answer": answer,
-                    "chunk_index": chunk_index,
-                },
-            )
-            return answer
-        except Exception as e:
-            logger.error(f"[McpCoordinator] Error: {e}")
-            return f"Lỗi điều phối agent MCP: {e}"
+    instructions = (
+        "Bạn là planner. Luôn gọi memory_get để lấy lịch sử. "
+        "Ưu tiên tool retrieve để lấy thông tin từ PDF. "
+        f"{web_msg} "
+        "Trả về duy nhất một JSON thuần (không mã hoá code block) với khóa source, context, memory. "
+        "Nếu lỗi tool, đặt source=error và context là thông báo lỗi."
+    )
+    return Agent(
+        name="MCP Planner Agent",
+        model=Gemini(id="gemini-2.5-flash"),
+        tools=tools,
+        instructions=instructions,
+        markdown=False,
+    )
 
 # Agent Retriever
 class RetrieverAgent:

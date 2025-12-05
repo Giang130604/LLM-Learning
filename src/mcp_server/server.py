@@ -48,8 +48,6 @@ def invoke(req: InvokeRequest):
     except Exception as e:
         logger.error(f"Error invoking tool {req.tool}: {str(e)}")
         raise HTTPException(500, str(e))
-# ================================================================
-
 # === Tool implementations =======================================
 
 @mcp_tool("web_search_tool")
