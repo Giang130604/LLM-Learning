@@ -16,6 +16,7 @@ from typing import List
 import logging
 import sqlite3
 from mcp_client.client import MCPClient  # Import MCP Client
+from agents import McpCoordinatorAgent
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +46,8 @@ vector_store = None
 rag_agent = None
 # Đọc MCP endpoint từ env (MCP_SERVER_URL) hoặc mặc định http://localhost:8000
 mcp_client = MCPClient()
+# Không dùng LLM tóm tắt web/history để tránh phụ thuộc Ollama (chỉ dùng Gemini cho câu trả lời)
+mcp_coordinator = McpCoordinatorAgent(mcp_client, summarizer_agent=None)
 
 class QueryRequest(BaseModel):
     query: str
@@ -81,58 +84,16 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
-    if not vector_store or not rag_agent:
-        raise HTTPException(status_code=400, detail="Vui lòng tải PDF trước")
-
     query = request.query.lower()
     session_id = "user_session_1"
 
     try:
-        # Truy xuất thông tin qua MCP Client
-        chunks = mcp_client.invoke(
-            "retrieve_chunks", {"question": query, "top_k": 3}
-        )
-        source = "vector_store" if chunks else "web_search"
-        chunk_index = None  # MCP Server không trả về chunk_index, để None
-
-        if not chunks:  # Fallback sang web search
-            snippets = mcp_client.invoke(
-                "web_search_tool", {"query": query, "num_results": 5}
-            )
-            chunks = snippets
-
-        context = "\n\n".join(chunks)
-
-        # Lấy lịch sử qua MCP Client
-        history_lines = mcp_client.invoke(
-            "memory_get", {"session_id": session_id, "max_rows": 5}
-        )
-        memory_context = "\n".join(history_lines)
-
-        # Tạo prompt và gọi RAG agent
-        full_prompt = (
-            f"Bối cảnh: {context}\n\n"
-            f"Lịch sử trò chuyện: {memory_context}\n\n"
-            f"Nguồn: {source}\n\n"
-            f"Câu hỏi: {query}\n\n"
-            "Hãy cung cấp một câu trả lời chi tiết dựa trên thông tin có sẵn."
-        )
-        logger.debug(f"Prompt gửi đến LLM:\n{full_prompt}")
-        response = rag_agent.run(full_prompt)
-        answer = response.content
-
-        # Lưu vào lịch sử qua MCP Client
-        mcp_client.invoke(
-            "memory_add",
-            {
-                "session_id": session_id,
-                "query": query,
-                "answer": answer,
-                "chunk_index": chunk_index,
-            }
-        )
-
+        answer = mcp_coordinator.run(query, session_id)
+        if answer.startswith("Lỗi"):
+            raise HTTPException(status_code=500, detail=answer)
         return {"answer": answer}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Lỗi khi xử lý câu hỏi: {e}")
         raise HTTPException(status_code=500, detail=str(e))
