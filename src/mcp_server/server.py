@@ -70,7 +70,7 @@ _store_cache = None
 _embedder = None  
 
 @mcp_tool("retrieve_chunks")
-def retrieve_chunks(question: str, top_k: int = 3) -> List[str]:
+def retrieve_chunks(question: str, top_k: int = 5) -> List[str]:
     """Truy xuất các đoạn PDF liên quan bằng vector store được cache."""
     global _docs_cache, _store_cache, _embedder
     try:

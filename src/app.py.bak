@@ -1,27 +1,28 @@
-﻿import json
-import logging
-import os
-import re
-import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import shutil
+import logging
+import json
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Dict, Optional
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from agents import get_rag_agent
+
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from agents import AnswerGeneratorAgent, get_mcp_planner_agent  # noqa: E402
-from main import FAISSVectorStore, VietnameseEmbedder  # noqa: E402
-from mcp_client.client import MCPClient  # noqa: E402
-from persistent_memory import PersistentMemory  # noqa: E402
+from main import VietnameseEmbedder, FAISSVectorStore, get_rag_agent  # noqa: E402
+from agents import get_mcp_planner_agent, AnswerGeneratorAgent  # noqa: E402
 from utils import process_pdf  # noqa: E402
+from persistent_memory import PersistentMemory  # noqa: E402
+from mcp_client.client import MCPClient  # noqa: E402
 
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         file_meta[file_id] = original_name
         last_file_id = file_id
 
-        return {"message": "PDF đã được xử lý thành công", "file_id": file_id, "file_name": original_name}
+    return {"message": "PDF đã được xử lý thành công", "file_id": file_id, "file_name": original_name}
     except Exception as e:
         logger.error("Lỗi khi xử lý PDF: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -110,7 +111,9 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.get("/files")
 async def list_files():
-    """Liệt kê file PDF đã upload (trong phiên chạy hiện tại)."""
+    """
+    Liệt kê các file PDF đã upload (trong phiên chạy hiện tại).
+    """
     return [{"file_id": fid, "file_name": file_meta.get(fid, fid)} for fid in vector_stores.keys()]
 
 

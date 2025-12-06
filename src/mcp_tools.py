@@ -9,7 +9,7 @@ def _get_client(client: MCPClient | None) -> MCPClient:
     return client or MCPClient()
 
 
-def tool_retrieve(question: str, top_k: int = 3, client: MCPClient | None = None) -> str:
+def tool_retrieve(question: str, top_k: int = 5, client: MCPClient | None = None) -> str:
     """
     Retrieve relevant chunks from the PDF store. Use when the question is about the uploaded PDF.
     Returns a concatenated text context.

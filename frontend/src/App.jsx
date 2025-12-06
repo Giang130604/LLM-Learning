@@ -23,18 +23,23 @@ const writeJson = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* ignore quota/parsing errors */
+    /* ignore */
   }
 };
 
-// --- API helpers ---
+// API helpers
 async function uploadPdf(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/upload_pdf`, {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetch(`${API_BASE}/upload_pdf`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function uploadPdfs(files) {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const res = await fetch(`${API_BASE}/upload_pdfs`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -55,6 +60,16 @@ async function fetchHistory(sessionId) {
   return res.json();
 }
 
+async function deleteSessionApi(sessionId) {
+  const res = await fetch(`${API_BASE}/session`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export default function App() {
   const initialSessionId = useRef(createSessionId()).current;
 
@@ -62,7 +77,6 @@ export default function App() {
   const storedMessages = readJson("messagesBySession", null);
   const storedCurrentSession = readJson("currentSession", null);
 
-  // UI state
   const [sessions, setSessions] = useState(() =>
     Array.isArray(storedSessions) && storedSessions.length
       ? storedSessions
@@ -97,7 +111,6 @@ export default function App() {
     });
   };
 
-  // Keep currentSession valid if sessions change
   useEffect(() => {
     if (!sessions.some((s) => s.id === currentSession)) {
       const fallback = sessions[0]?.id || initialSessionId;
@@ -105,17 +118,14 @@ export default function App() {
     }
   }, [sessions, currentSession, initialSessionId]);
 
-  // Persist to localStorage
   useEffect(() => writeJson("sessions", sessions), [sessions]);
   useEffect(() => writeJson("currentSession", currentSession), [currentSession]);
   useEffect(() => writeJson("messagesBySession", messagesBySession), [messagesBySession]);
 
-  // Load history when switching session
   useEffect(() => {
     fetchHistory(currentSession).then(setHistoryList).catch(console.error);
   }, [currentSession]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [currentMessages, loading]);
@@ -140,16 +150,49 @@ export default function App() {
     }
   };
 
+  const handleDeleteSession = async (sessionId) => {
+    try {
+      await deleteSessionApi(sessionId);
+    } catch (err) {
+      console.error("Delete session failed", err);
+    }
+
+    setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    setMessagesBySession((prev) => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return Object.keys(next).length ? next : { [initialSessionId]: [] };
+    });
+
+    if (currentSession === sessionId) {
+      const remaining = sessions.filter((s) => s.id !== sessionId);
+      const fallbackId = remaining[0]?.id || createSessionId();
+      if (!remaining[0]) {
+        setSessions([{ id: fallbackId, title: "Phiên 1" }]);
+      }
+      setCurrentSession(fallbackId);
+      setHistoryList([]);
+    }
+  };
+
   const handleFileSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const selected = e.target.files ? Array.from(e.target.files) : [];
+    if (!selected.length) return;
     const sessionId = currentSession;
 
     try {
       setUploading(true);
-      await uploadPdf(file);
-      setUploadedFile(file.name);
-      updateMessages(sessionId, (prev) => [...prev, { type: "system", text: `Đã tải lên và xử lý: ${file.name}` }]);
+      if (selected.length === 1) {
+        const file = selected[0];
+        await uploadPdf(file);
+        setUploadedFile(file.name);
+        updateMessages(sessionId, (prev) => [...prev, { type: "system", text: `Đã tải lên và xử lý: ${file.name}` }]);
+      } else {
+        const resp = await uploadPdfs(selected);
+        const names = resp.uploaded?.map((f) => f.file_name).join(", ");
+        setUploadedFile(names || `${selected.length} files`);
+        updateMessages(sessionId, (prev) => [...prev, { type: "system", text: `Đã tải lên: ${names || selected.length + " files"}` }]);
+      }
     } catch (err) {
       updateMessages(sessionId, (prev) => [...prev, { type: "system", text: `Lỗi upload: ${err.message}` }]);
     } finally {
@@ -237,7 +280,6 @@ export default function App() {
 
   return (
     <div className="shell">
-      {/* --- SIDEBAR --- */}
       <aside className="sidebar">
         <div className="logo">
           <i className="fas fa-atom"></i> RAG COSMIC
@@ -261,7 +303,18 @@ export default function App() {
               }
             >
               <i className="far fa-comment-alt"></i>
-              <span>{s.title}</span>
+              <span style={{ flex: 1 }}>{s.title}</span>
+              <button
+                className="icon-btn"
+                title="Xóa phiên"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteSession(s.id);
+                }}
+                style={{ padding: 6, fontSize: 14 }}
+              >
+                <i className="fas fa-trash"></i>
+              </button>
             </div>
           ))}
 
@@ -275,9 +328,7 @@ export default function App() {
                 <span>{h.query}</span>
               </div>
             ))}
-          {historyList.length === 0 && (
-            <div style={{ padding: "0 15px", fontSize: "13px", color: "#64748b" }}>Chưa có lịch sử</div>
-          )}
+          {historyList.length === 0 && <div style={{ padding: "0 15px", fontSize: "13px", color: "#64748b" }}>Chưa có lịch sử</div>}
         </div>
 
         <div className="profile">
@@ -286,11 +337,9 @@ export default function App() {
         </div>
       </aside>
 
-      {/* --- MAIN CHAT --- */}
       <main className="main">
         <div className="chat-scroll-area">
           {currentMessages.length === 0 ? (
-            /* HERO / EMPTY STATE */
             <div className="hero-container">
               <div className="hero-icon">
                 <i className="fas fa-robot"></i>
@@ -301,7 +350,6 @@ export default function App() {
               </div>
             </div>
           ) : (
-            /* MESSAGE LIST */
             currentMessages.map((msg, idx) => {
               const isUser = msg.type === "user";
               const isSystem = msg.type === "system";
@@ -349,10 +397,8 @@ export default function App() {
           <div ref={chatEndRef}></div>
         </div>
 
-        {/* --- INPUT FLOATING AREA --- */}
         <div className="input-region">
           <div className="input-container">
-            {/* File preview */}
             {uploadedFile && (
               <div className="file-preview">
                 <i className="fas fa-file-pdf"></i> {uploadedFile}
@@ -361,20 +407,15 @@ export default function App() {
             )}
 
             <div className="input-row">
-              {/* Upload PDF */}
               <input
                 type="file"
                 ref={fileInputRef}
                 accept="application/pdf"
+                multiple
                 style={{ display: "none" }}
                 onChange={handleFileSelect}
               />
-              <button
-                className="icon-btn"
-                title="Tải lên PDF"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
+              <button className="icon-btn" title="Tải lên PDF" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
                 {uploading ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-paperclip"></i>}
               </button>
 

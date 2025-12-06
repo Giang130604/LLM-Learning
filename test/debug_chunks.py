@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-Debug script để check nội dung các chunk
-"""
+
 import sys
 import os
 

@@ -13,6 +13,7 @@ import requests
 from sentence_transformers import SentenceTransformer
 import pickle
 import hashlib
+import re
 
 from unstructured.partition.pdf import partition_pdf
 
@@ -20,7 +21,7 @@ from unstructured.partition.pdf import partition_pdf
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.3  
+SIMILARITY_THRESHOLD = 0.3
 # Đường dẫn tuyệt đối tới thư mục cache (tránh lệch CWD giữa app và MCP)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR = BASE_DIR / "data" / "cache"
@@ -38,11 +39,13 @@ def get_file_hash(file_path: str) -> str:
 
 # Xử lý PDF
 def _clean_text(text: str) -> str:
-    """Làm sạch nhẹ để giảm nhiễu OCR (bảng, ký tự thừa)."""
-    text = text.replace("|", " ")
+    """Làm sạch nhẹ để hạn chế dính cột bảng."""
+    text = text.replace("|", " | ")
     text = text.replace("\u00a0", " ")
+    text = re.sub(r"(\d)\s{2,}(\d)", r"\1 | \2", text)
     while "  " in text:
         text = text.replace("  ", " ")
+    text = re.sub(r"\r\n?", "\n", text)
     return text.strip()
 
 
@@ -78,7 +81,7 @@ def process_pdf(file_path: str) -> List[Document]:
         return partition_pdf(
             filename=file_path,
             strategy=strategy,
-            infer_table_structure=True if use_ocr else False, 
+            infer_table_structure=True if use_ocr else False,
             extract_images_in_pdf=True,
             languages=["vie"],
             ocr_languages=["vie"] if use_ocr else None,
@@ -86,7 +89,7 @@ def process_pdf(file_path: str) -> List[Document]:
             max_characters=4000,
             new_after_n_chars=3800,
             combine_text_under_n_chars=2000,
-            pdf_image_dpi = 300
+            pdf_image_dpi=300,
         )
 
     raw_elements = _partition(strategy="hi_res", use_ocr=True)
@@ -99,8 +102,8 @@ def process_pdf(file_path: str) -> List[Document]:
             metadata={
                 "index": i + 1,
                 "file_name": os.path.basename(file_path),
-                "timestamp": datetime.now().isoformat()
-            }
+                "timestamp": datetime.now().isoformat(),
+            },
         )
         documents.append(doc)
 
@@ -115,6 +118,7 @@ def process_pdf(file_path: str) -> List[Document]:
 
     logger.info(f"Đã trích xuất {len(documents)} chunk từ PDF.")
     return documents
+
 
 # Embedding
 class VietnameseEmbedder(Embeddings):
@@ -139,6 +143,7 @@ class VietnameseEmbedder(Embeddings):
             logger.error(f"Lỗi khi tạo embedding cho query: {e}")
             return [0.0] * 768
 
+
 # FAISS Vector Store
 class FAISSVectorStore:
     def __init__(self, documents: List[Document], embedder: Embeddings):
@@ -146,19 +151,19 @@ class FAISSVectorStore:
         self.embedder = embedder
         logger.info(f"[DEBUG] Khởi tạo FAISSVectorStore với {len(documents)} documents")
         logger.info(f"[DEBUG] Similarity threshold mặc định: {SIMILARITY_THRESHOLD}")
-        
+
         logger.info("Đang tạo embeddings cho các chunk...")
         self.embeddings = self.embedder.embed_documents([doc.page_content for doc in documents])
         logger.info(f"[DEBUG] Đã tạo {len(self.embeddings)} embeddings")
         logger.info(f"[DEBUG] Embedding dimension: {len(self.embeddings[0]) if self.embeddings else 'Unknown'}")
-        
+
         self.embeddings_np = np.array(self.embeddings).astype("float32")
         logger.info(f"[DEBUG] Embeddings array shape: {self.embeddings_np.shape}")
-        
+
         norms = np.linalg.norm(self.embeddings_np, axis=1, keepdims=True)
         self.embeddings_np = self.embeddings_np / norms
         logger.info(f"[DEBUG] Embeddings đã được normalize")
-        
+
         d = self.embeddings_np.shape[1]
         self.index = faiss.IndexFlatIP(d)
         self.index.add(self.embeddings_np)
@@ -170,43 +175,44 @@ class FAISSVectorStore:
         logger.info(f"[DEBUG] Similarity threshold hiện tại: {threshold}")
         logger.info(f"[DEBUG] Top K: {top_k}")
         logger.info(f"[DEBUG] Tổng số documents trong vector store: {len(self.documents)}")
-        
+
         q_embedding = self.embedder.embed_query(query)
         logger.info(f"[DEBUG] Query embedding shape: {len(q_embedding)}")
-        
+
         q_embedding = np.array(q_embedding, dtype="float32")
         q_norm = np.linalg.norm(q_embedding)
         logger.info(f"[DEBUG] Query embedding norm: {q_norm}")
-        
+
         if q_norm > 0:
             q_embedding = q_embedding / q_norm
         q_embedding = np.expand_dims(q_embedding, axis=0)
-        
+
         D, I = self.index.search(q_embedding, top_k)
         logger.info(f"[DEBUG] Top {top_k} similarity scores: {D[0].tolist()}")
         logger.info(f"[DEBUG] Top {top_k} document indices: {I[0].tolist()}")
-        
+
         results = []
         found_any = False
         for i, (idx, sim) in enumerate(zip(I[0], D[0])):
             logger.info(f"[DEBUG] Chunk {idx + 1}: similarity = {sim:.4f}, threshold = {threshold}")
             if sim >= threshold:
                 results.append(self.documents[idx])
-                logger.info(f"✓ Đoạn được truy xuất: chunk {idx + 1}, similarity: {sim:.4f}")
+                logger.info(f"Đoạn được truy xuất: chunk {idx + 1}, similarity: {sim:.4f}")
                 found_any = True
             else:
-                logger.info(f"✗ Đoạn bị loại bỏ: chunk {idx + 1}, similarity {sim:.4f} < threshold {threshold}")
-        
+                logger.info(f"Đoạn bị loại: chunk {idx + 1}, similarity {sim:.4f} < threshold {threshold}")
+
         if not found_any and threshold > 0.05:
             logger.info(f"[DEBUG] Không tìm thấy kết quả với threshold {threshold}, thử lại với 0.05")
             fallback_threshold = 0.05
             for i, (idx, sim) in enumerate(zip(I[0], D[0])):
                 if sim >= fallback_threshold:
                     results.append(self.documents[idx])
-                    logger.info(f"✓ [FALLBACK] Đoạn được truy xuất: chunk {idx + 1}, similarity: {sim:.4f}")
-        
+                    logger.info(f"[FALLBACK] Đoạn được truy xuất: chunk {idx + 1}, similarity: {sim:.4f}")
+
         logger.info(f"[DEBUG] Số lượng documents được trả về: {len(results)}")
         return results
+
 
 # Web searching tool
 def web_search(query: str, num_results=10, api_key="b91e335ef3ef0b0f01dceef77c1c057d0d538bed") -> List[str]:
